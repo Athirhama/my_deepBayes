@@ -8,7 +8,9 @@ import math
 import numpy as np
 import os
 from six.moves import xrange
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
 import time
 import warnings
 import logging

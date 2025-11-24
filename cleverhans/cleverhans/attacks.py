@@ -3,6 +3,12 @@ import numpy as np
 from six.moves import xrange
 import warnings
 import collections
+import collections.abc
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
+if not hasattr(collections, "Hashable"):
+    collections.Hashable = collections.abc.Hashable
 
 import cleverhans.utils as utils
 from cleverhans.model import Model, CallableModelWrapper
@@ -101,9 +107,9 @@ class Attack(object):
             given_type = self.feedable_kwargs[name]
             if isinstance(value, np.ndarray):
                 new_shape = [None] + list(value.shape[1:])
-                new_kwargs[name] = tf.placeholder(given_type, new_shape)
+                new_kwargs[name] = tf.compat.v1.placeholder(given_type, new_shape)
             elif isinstance(value, utils.known_number_types):
-                new_kwargs[name] = tf.placeholder(given_type, shape=[])
+                new_kwargs[name] = tf.compat.v1.placeholder(given_type, shape=[])
             else:
                 raise ValueError("Could not identify type of argument " +
                                  name + ": " + str(value))
@@ -114,7 +120,7 @@ class Attack(object):
             x_shape = [fixed['batch_size']] + list(x_val.shape)[1:]
         else:
             x_shape = [None] + list(x_val.shape)[1:]
-        x = tf.placeholder(tf.float32, shape=x_shape)
+        x = tf.compat.v1.placeholder(tf.float32, shape=x_shape)
 
         # now we generate the graph that we want
         x_adv = self.generate(x, **new_kwargs)

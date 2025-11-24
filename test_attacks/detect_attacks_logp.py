@@ -5,12 +5,13 @@ from __future__ import unicode_literals
 
 import numpy as np
 from six.moves import xrange
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 import os, sys, pickle, argparse
 sys.path.append('../utils/')
 from model_eval import model_eval
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
 import keras.backend
 sys.path.append('load/')
 from load_classifier import load_classifier
@@ -128,7 +129,7 @@ def test_attacks(batch_size, conv, guard_name, targeted, attack_method, victim_n
     x_adv, _, y_clean, adv_logits = pickle.load(open(filename, 'rb'))
 
     # for cifar-binary, need to extract test data that all the classifiers agree on
-    if data_name == 'plane_frog':
+    if  data_name == 'plane_frog':
         load_path = 'data_ind/'
         ind = range(x_clean.shape[0])
         classifiers = ['bayes_K10_A_cnn', 'bayes_K10_B_cnn', 'bayes_K10_C_cnn',
@@ -146,10 +147,10 @@ def test_attacks(batch_size, conv, guard_name, targeted, attack_method, victim_n
     print("data loaded from %s, %d samples in total" % (filename, x_adv.shape[0]))
     print(x_clean.shape, x_adv.shape)
 
-    if 'bnn' not in guard_name:
-        keras.backend.set_learning_phase(0)
-    else:
-        keras.backend.set_learning_phase(1)
+    #if 'bnn' not in guard_name:
+        #keras.backend.set_learning_phase(0)
+    #else:
+        #keras.backend.set_learning_phase(1)
  
     y_logit_op = gen.predict(x, softmax=False)
     # compute classification

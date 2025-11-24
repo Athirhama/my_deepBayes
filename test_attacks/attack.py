@@ -5,7 +5,8 @@ from __future__ import unicode_literals
 
 import numpy as np
 from six.moves import xrange
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 from tensorflow.python.platform import flags
 
 import logging, os, sys, pickle, argparse
@@ -14,7 +15,11 @@ sys.path.append('../cleverhans/')
 from cleverhans.utils import set_log_level
 from model_eval import model_eval
 
-import keras.backend
+#import keras.backend
+from tensorflow import keras
+from tensorflow.keras import backend as K
+
+
 sys.path.append('load/')
 from load_classifier import load_classifier
 import pickle
@@ -25,7 +30,9 @@ def test_attacks(data_name, model_name, attack_method, eps, batch_size=100,
                  targeted=False, save=False):
 
     # Set TF random seed to improve reproducibility
-    tf.set_random_seed(1234)
+    #tf.set_random_seed(1234)
+    tf.compat.v1.set_random_seed(1234)
+
 
     # Create TF session
     config = tf.ConfigProto()
@@ -70,12 +77,13 @@ def test_attacks(data_name, model_name, attack_method, eps, batch_size=100,
     print("This could take some time ...")
 
     # Evaluate the accuracy of the MNIST model on legitimate test examples
-    if 'bnn' not in model_name:
-        keras.backend.set_learning_phase(0)
-    else:
-        # need to set keras learning phase to training in order to run test-time dropout
-        keras.backend.set_learning_phase(1)
+    #if 'bnn' not in model_name:
+        #keras.backend.set_learning_phase(0)
+        #K.set_learning_phase(0)
 
+    #else:
+        # need to set keras learning phase to training in order to run test-time dropout
+        #K.set_learning_phase(1)
     # make adv inputs and labels for the attack if targeted
     if targeted:
         adv_inputs = np.array(
