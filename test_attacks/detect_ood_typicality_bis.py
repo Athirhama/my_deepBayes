@@ -1,10 +1,17 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import numpy as np
 from six.moves import xrange
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
+# Keras is part of TF, useful for loading MNIST easily
+from tensorflow import keras 
 
 import os, sys, pickle, argparse
-import matplotlib.pyplot as plt # <--- NEW IMPORT
+import matplotlib.pyplot as plt 
 
 # Ensure paths are correct for Colab execution
 sys.path.append('../utils/')
@@ -21,7 +28,6 @@ def compute_empirical_entropy(logit):
     Computes the empirical entropy for a set of samples X: H_hat = 1/N * sum(-log p(x_n))
     This returns the negative log-likelihood scores.
     """
-    # log p(x) for each sample is the input logit
     neg_logpx = -logit
     return neg_logpx
 
@@ -30,14 +36,36 @@ def compute_test_statistic(neg_logpx_batch, resubstitution_entropy_hat):
     Computes the typicality test statistic (Eq. 3 in paper): 
     | 1/M * sum(-log p(x_m)) - H_hat_RESUB | = epsilon_hat
     """
-    # Calculate the sample entropy for the batch
     sample_entropy_hat = np.mean(neg_logpx_batch)
-    
-    # Calculate the test statistic (epsilon_hat)
     epsilon_hat = np.abs(sample_entropy_hat - resubstitution_entropy_hat)
     return epsilon_hat
 
-# --- New Helper Functions for Visualization ---
+# --- New Helper Functions for Data Processing and Visualization ---
+
+def load_and_process_mnist_test():
+    """
+    Loads MNIST test data and processes it to match CIFAR-10 model input: (N, 32, 32, 3).
+    """
+    print("Loading raw MNIST test data...")
+    # Load raw MNIST data
+    (_, _), (X_test_raw, _) = keras.datasets.mnist.load_data()
+    
+    # 1. Normalize: [0, 255] -> [0, 1] and convert to float32
+    X_test = X_test_raw.astype('float32') / 255.0
+    
+    # 2. Add channel dimension: (N, 28, 28) -> (N, 28, 28, 1)
+    X_test = np.expand_dims(X_test, axis=-1)
+    
+    # 3. Pad 28x28 to 32x32: Add 2 pixels of zero padding on each side (32-28 = 4, 4/2 = 2)
+    # The padding is applied to the spatial dimensions (axis 1 and 2)
+    X_test_padded = np.pad(X_test, ((0, 0), (2, 2), (2, 2), (0, 0)), 'constant', constant_values=0.0)
+    
+    # 4. Convert 1-channel grayscale to 3-channel RGB (stack the channel 3 times)
+    X_test_rgb = np.repeat(X_test_padded, 3, axis=-1)
+    
+    # Final shape should be (10000, 32, 32, 3)
+    return X_test_rgb
+
 
 def compute_all_epsilon_scores(sess, y_logit_op, x_placeholder, data_x, M, H_hat_RESUB):
     """Computes and stores epsilon_hat scores for all full M-sized batches."""
@@ -75,7 +103,7 @@ def detect_typicality_rate_from_scores(epsilon_scores, n_batches, epsilon_alpha_
 
 # --- Core OOD Detection Logic ---
 
-def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50):
+def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50, ood_data_name='cifar'):
     # Set TF random seed to improve reproducibility
     tf.set_random_seed(1234)
     # Create TF session
@@ -88,30 +116,37 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
     img_rows, img_cols, channels = 32, 32, 3
     datapath = '../cifar_data/' 
     
-    # Load FULL CIFAR-10 data (10 classes, 10-dim one-hot) for ID/OOD separation
+    # Load FULL CIFAR-10 data (10 classes, 10-dim one-hot)
     x_train_full, X_all_test, y_train_full, Y_all_test = load_data_cifar10(datapath, labels=None)
 
-    # Filter the data into ID (Plane/Frog) and OOD (Other) sets
+    # Filter ID data (Plane/Frog)
     id_labels = [0, 6]  # Plane and Frog
     all_labels = np.argmax(Y_all_test, axis=1)
-
     id_indices = np.where((all_labels == id_labels[0]) | (all_labels == id_labels[1]))[0]
-    ood_indices = np.where((all_labels != id_labels[0]) & (all_labels != id_labels[1]))[0]
     
-    # Load the ID training set used by the model (2 classes, 2-dim one-hot)
+    # Load the ID training set (for H_hat_RESUB)
     x_train, X_test_full_ID, y_train, Y_test_full_ID = load_data_cifar10(datapath, labels=id_labels)
 
-    # Final Test Sets (ID labels are NOT used here, only the images)
-    x_clean = X_all_test[id_indices] # In-distribution (ID) test set
-    x_ood = X_all_test[ood_indices] # Out-of-Distribution (OOD) test set
+    # Final ID Test Set (x_clean)
+    x_clean = X_all_test[id_indices] 
+
+    # --- Conditional OOD Data Loading ---
+    if ood_data_name == 'cifar':
+        # Use the remaining 8 CIFAR-10 classes as OOD
+        ood_indices = np.where((all_labels != id_labels[0]) & (all_labels != id_labels[1]))[0]
+        x_ood = X_all_test[ood_indices] 
+        ood_label = 'CIFAR-10 (Other)'
+    elif ood_data_name == 'mnist':
+        # Use MNIST test set as OOD
+        x_ood = load_and_process_mnist_test()
+        ood_label = 'MNIST'
+    else:
+        raise ValueError("Invalid OOD data name specified. Must be 'cifar' or 'mnist'.")
     
-    nb_classes = y_train.shape[1] # Should be 2
-    
-    print('Loaded ID (Train/Test): %d/%d, OOD Samples: %d' % 
-          (x_train.shape[0], x_clean.shape[0], x_ood.shape[0]))
+    print('Loaded ID (Train/Test): %d/%d, OOD Samples (%s): %d' % 
+          (x_train.shape[0], x_clean.shape[0], ood_label, x_ood.shape[0]))
     
     # --- 1.1 Create Validation Set for Bootstrap (M=batch_size) ---
-    # We will use the second half of the ID test set (2000 samples total) as X'
     x_val = x_clean[1000:]
     x_clean = x_clean[:1000] # Use the first half for final ID evaluation
     
@@ -121,36 +156,26 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
     x = tf.placeholder(tf.float32, shape=(M, img_rows, img_cols, channels))
     
     gen = load_classifier(sess, guard_name, data_name)
-    
-    # Get the logit operation (which outputs log p(x) for VAE/Flows)
     y_logit_op = gen.predict(x, softmax=False) # Logits output (log p(x) for generative models)
     
     # --- 3. Compute Logits and Entropy Estimator (Offline step 1) ---
     
     def compute_logits_all(data_x):
-        """Computes logits for all samples, handling partial batching (M)."""
+        # ... (same as before, handles padding/truncation) ...
         logits = []
         n_samples = data_x.shape[0]
         n_batch = int(n_samples / M)
         
-        # Process full batches
         for i in xrange(n_batch):
             X_batch = data_x[i*M:(i+1)*M]
             logits.append(sess.run(y_logit_op, feed_dict={x: X_batch}))
             
-        # Handle the final partial batch (pad to size M if necessary)
         n_remaining = n_samples % M
         if n_remaining > 0:
-             # Create a partial batch and pad it with a few samples from the beginning
-             # to make it size M (This ensures a successful run of sess.run(y_logit_op)
-             # with the fixed size M placeholder, though the statistics must be corrected).
             X_partial = data_x[n_batch*M:]
             X_padded = np.concatenate([X_partial, data_x[:M - n_remaining]], axis=0)
             
-            # Run the padded batch
             logit_padded = sess.run(y_logit_op, feed_dict={x: X_padded})
-            
-            # Only keep the results for the actual remaining samples
             logits.append(logit_padded[:n_remaining])
 
         return np.concatenate(logits, 0)
@@ -159,7 +184,6 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
     y_logit_train = compute_logits_all(x_train)
     
     # 3.2 Compute the Resubstitution Entropy Estimator (Eq. 5, Offline step 1)
-    # H_hat_RESUB = 1/N * sum(-log p(x_n))
     neg_logpx_train = compute_empirical_entropy(y_logit_train)
     H_hat_RESUB = np.mean(neg_logpx_train)
     print("\n-------------------------------------")
@@ -172,35 +196,26 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
     epsilon_hat_bootstrap = []
     n_val = x_val.shape[0]
 
-    # Perform K bootstrap samples
     for k in xrange(K_bootstrap):
-        # 4.1 Sample M-sized batch from validation set X' (with replacement)
         idx = np.random.choice(n_val, size=M, replace=True)
         X_k_prime = x_val[idx]
         
-        # 4.2 Compute -log p(x) for the batch X_k_prime (Requires fixed size M)
         logit_k = sess.run(y_logit_op, feed_dict={x: X_k_prime}) 
         neg_logpx_k = compute_empirical_entropy(logit_k)
         
-        # 4.3 Compute the test statistic epsilon_hat_k (Eq. 6)
         epsilon_hat_k = compute_test_statistic(neg_logpx_k, H_hat_RESUB)
         epsilon_hat_bootstrap.append(epsilon_hat_k)
         
-    # 4.4 Set the rejection threshold epsilon_alpha^M (Offline step 4)
     epsilon_alpha_M = np.quantile(epsilon_hat_bootstrap, alpha)
     print('Rejection Threshold (epsilon_%.2f^M): %.3f' % (alpha, epsilon_alpha_M))
     print("-------------------------------------")
 
     # --- 5. OOD Detection & Score Collection (Online steps) ---
     
-    # Collect epsilon_hat for visualization
     id_epsilon_scores, n_batches_id = compute_all_epsilon_scores(sess, y_logit_op, x, x_clean, M, H_hat_RESUB)
     ood_epsilon_scores, n_batches_ood = compute_all_epsilon_scores(sess, y_logit_op, x, x_ood, M, H_hat_RESUB)
 
-    # 5.2 Calculate FP Rate (ID Rejection) - Should be low (Type-I Error)
     fp_rate = detect_typicality_rate_from_scores(id_epsilon_scores, n_batches_id, epsilon_alpha_M, is_ood_set=False)
-    
-    # 5.3 Calculate TP Rate (OOD Detection) - Should be high
     tp_rate_ood = detect_typicality_rate_from_scores(ood_epsilon_scores, n_batches_ood, epsilon_alpha_M, is_ood_set=True)
     
     results = {}
@@ -212,27 +227,23 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
 
     plt.figure(figsize=(10, 6))
     
-    # Plot OOD scores
     plt.hist(ood_epsilon_scores, bins=50, density=True, alpha=0.6, 
-             label='OOD Batches (All CIFAR-10 except Plane/Frog)', color='red')
+             label=r'OOD Batches (%s)' % ood_label, color='red')
     
-    # Plot ID scores
     plt.hist(id_epsilon_scores, bins=50, density=True, alpha=0.6, 
              label='ID Batches (Plane/Frog)', color='blue')
     
-    # Draw the critical rejection threshold
-    # Note: Using r"..." for raw strings to prevent SyntaxWarning on escape sequences like \h
     plt.axvline(epsilon_alpha_M, color='k', linestyle='--', linewidth=2, 
                 label=r'Rejection Threshold $\epsilon_{%.2f}^M = %.3f$' % (alpha, epsilon_alpha_M))
 
+    # Using raw strings r"..." fixes the SyntaxWarning issue
     plt.xlabel(r'Typicality Score ($\hat{\epsilon}$) - Deviation from Model Entropy', fontsize=12)
     plt.ylabel('Normalized Frequency', fontsize=12)
     plt.title(r'Distribution of Typicality Scores ($\hat{\epsilon}$) - Batch Size M=%d' % M, fontsize=14)
     plt.legend()
     plt.grid(axis='y', alpha=0.5)
     
-    # --- FIX: Save the plot to a file instead of showing it interactively ---
-    plot_filename = 'typicality_histogram_%s_M%d_alpha%s.png' % (guard_name, M, str(alpha).replace('.', ''))
+    plot_filename = 'typicality_histogram_%s_M%d_alpha%s_OOD-%s.png' % (guard_name, M, str(alpha).replace('.', ''), ood_data_name)
     plt.savefig(plot_filename)
     print("Histogram saved as %s" % plot_filename)
     
@@ -246,7 +257,7 @@ def test_ood(batch_size, guard_name, data_name, save, alpha=0.99, K_bootstrap=50
         if not os.path.isdir(path):
             os.makedirs(path, exist_ok=True)
         
-        filename = data_name + '_' + guard_name + '_typicality_OOD'
+        filename = data_name + '_' + guard_name + '_typicality_OOD_' + ood_data_name
         
         pickle.dump(results, open(path + filename + '.pkl', 'wb'))
         print("results saved at %s.pkl" % (path + filename))
@@ -262,7 +273,10 @@ if __name__ == '__main__':
                         help='Confidence level for the bootstrap test (1 - FP rate).')
     parser.add_argument('--K_bootstrap', '-K', type=int, default=50, 
                         help='Number of bootstrap samples (K) for threshold setting.')
+    parser.add_argument('--ood', '-O', type=str, default='cifar', choices=['cifar', 'mnist'],
+                        help='Select OOD dataset: "cifar" (other CIFAR-10 classes) or "mnist".') # <--- NEW ARGUMENT
     
     args = parser.parse_args()
     
-    test_ood(args.batch_size, args.guard, 'plane_frog', args.save, args.alpha, args.K_bootstrap)
+    # Pass the new OOD argument to the test function
+    test_ood(args.batch_size, args.guard, 'plane_frog', args.save, args.alpha, args.K_bootstrap, args.ood)
