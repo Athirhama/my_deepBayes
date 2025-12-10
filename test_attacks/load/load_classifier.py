@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
-
+import sys
+sys.path.append("/content/my_deepBayes/test_attacks/load/")
 def load_classifier(sess, model_name, data_name, path=None,
                     attack_snapshot=False):
 
